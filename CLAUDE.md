@@ -179,10 +179,10 @@ Full-page view (not a slide-over). Header: avatar, name, DOB · insurer · membe
 **Display:** RBT credentials attached (cert # on file)
 **Fields:** Weekly session schedule | Session location
 
-### Stage 8: Staffing → In Services (7 items)
+### Stage 8: Staffing → In Services (5 items)
 **Checkboxes:** Caregiver availability confirmed | Staff schedule coordinated | First session scheduled
 **Fields:** First session date | First session time | Session location
-**Checkbox:** First session completed
+*(First session completed is NOT in Staffing — it is logged in Services via the session log)*
 
 ### Stage 9: In Services — Reauthorization Cycle (9 items)
 **Banner:** "↻ Reauthorization cycle active · Auth expires [date]"
@@ -242,6 +242,27 @@ The AI generates graphs dynamically from observed baseline % values entered in S
 Statuses: In progress | In review | Completed
 Card: client name, BCBA, progress bar, X/12 sections captured/approved, mic+edit icons, CTA (Continue → / Review → / View).
 The counter shows X/11 when Caregiver Training (section 11) has no data; shows 12/12 when fully complete.
+
+### Reassessment Layout (grouped rows)
+When a client has `reassessment_sessions[]`, the Assessments page shows a grouped row:
+- **Initial assessment** row (always first) — same card format as above
+- **Reassessment** sub-rows — one per entry in `reassessment_sessions[]`, showing cycle number, auth period, status, and CTA ("Continue →" / "Review →" / "View")
+- Clients with an active in-progress reassessment sort to the top (sortTier 0)
+
+### Reassessment Session Swap Pattern
+`App.jsx` / `handleOpenAssessment({ type: 'reassessment', clientId })`:
+1. Checks if `client.assessment_session.sessionType === 'reassessment'` already (previously opened)
+2. Otherwise finds an in-progress entry in `client.reassessment_sessions[]`
+3. Or calls `makeReassessmentSession()` to create a new one
+4. Swaps it into `client.assessment_session`, saves the original in `client._initialAssessment`
+5. On close/complete: `archiveReassessmentAndClose()` in `AssessmentFeature.jsx` writes the current state back to `reassessment_sessions[]` and restores `_initialAssessment`
+
+### `makeReassessmentSession(client, initialSession, sessionLogs, authPeriodStart, authPeriodEnd)`
+Builds a reassessment session from:
+- `initialSession.sections` — copies behavior targets and skill goals as starting point
+- `sessionLogs` — computes `originalBehaviorSummary` (avg frequency per behavior across logs) and `caregiverTrainingSummary`
+- `sto:` computation uses 3-tier fallback: `stoSteps[]` → `stoPercent`/`stoWeeks` → free-text `sto`
+Returns a full session object with `sessionType: 'reassessment'`, `authPeriodStart`, `authPeriodEnd`, pre-populated behavior and caregiver summaries.
 
 ### Phase 1 — Interview Capture (12 Sections)
 Left sidebar: all 12 sections, color-coded status dots (green=complete, amber=partial, empty=none).
@@ -318,9 +339,62 @@ Key payers in scope: BCBS (via Lucet/WebPass), Cigna/Evernorth, Sunshine Health 
 
 ## Completed Work (this branch)
 
-**feat/caregiver-training-update-STO-LTO-part-2** — Two major feature tracks:
+**feat/reassessment-workflow** — Reassessment workflow + full Charlotte Davis seed + checklist fixes
 
-### Track 1: Multi-step STO milestones for skill acquisition goals
+### Track 1: Reassessment Workflow
+- `ReassessmentReviewPage.jsx` — new page for reviewing and generating the reassessment document; has its own sticky footer generate button
+- `AssessmentFeature.jsx` — swap pattern: reassessment session is temporarily placed in `client.assessment_session`; on close or completion it is archived back to `client.reassessment_sessions[]` via `archiveReassessmentAndClose()`
+- `AssessmentsPage.jsx` — grouped layout: each client row shows initial assessment + any reassessment entries with status badges
+- `AssessmentInterviewPage.jsx` — `sessionType`-aware interview; shows a reassessment context panel when `session.sessionType === 'reassessment'`
+- `SectionCard.jsx` / `SectionSidebar.jsx` — accept and forward `sessionType` prop
+- `sectionConfig.js` — reassessment section config entries
+- `App.jsx` — `handleOpenAssessment` now accepts either a clientId string or `{ type, clientId }` object; `type === 'reassessment'` triggers session swap
+
+### Track 2: `makeReassessmentSession` fix
+- Fixed both `sto:` computation lines to use 3-tier IIFE: `stoSteps[]` → `stoPercent`/`stoWeeks` → free-text `sto`
+- Previously only checked `stoPercent` fallback, causing empty STO strings for caregiver training targets (which use `stoSteps[]`)
+
+### Track 3: Charlotte Davis (c10) — full end-to-end seed
+- All 12 interview sections in `CHARLOTTE_INTERVIEW_DATA` (demographics, presenting concerns, self-help, daily living, safety, communication, self-stim, medical necessity with full `draftContent`, crisis plan, behavior targets, skill acquisitions, caregiver training)
+- 12 documents spanning intake → services
+- 45-entry activity log
+- 7 case notes spanning assessment → services
+- 6 service session logs with gradual behavior reduction data
+- 3 caregiver training session logs with improving % data
+- Cycle 1 reassessment session (`makeReassessmentSession`, status `in_progress`)
+
+### Track 4: James Martinez (c11) — seed data additions
+- `caregiverTrainingTargets[]` with `stoSteps[]` on assessment session
+- 4 service session logs with behavior reduction trajectory
+
+### Track 5: Checklist key fixes (checklist.js + seedData.js)
+All `cl.*` seed assignments now use the exact keys `mkChecklist()` and `getStageItems()` read:
+
+| Section | Wrong key (old) | Correct key (new) |
+|---|---|---|
+| `submitted` | `treatment_plan_submitted` | `plan_submitted` |
+| `submitted` | `auth_approval_doc` | `approval_uploaded` |
+| `submitted` | `auth_period_start` | `auth_start_date` |
+| `submitted` | `auth_period_end` | `auth_end_date` |
+| `authorized` | `bcba_verified` | `bcba_credentials_verified` |
+| `authorized` | `weekly_schedule` | `schedule_template` |
+| `authorized` | *(missing)* | `bcba_matches_auth`, `scheduled_hours_week`, `scheduled_97155_week`, `scheduled_97156_week` |
+| `services` (old key) | `cl.services` | `cl.services_reauth` |
+| `services_reauth` | `behavioral_graphs` | `updated_graphs` |
+| `services_reauth` | `hours_97153_used` | `hours_consumed_97153` |
+| `services_reauth` | `hours_97155_used` | `hours_consumed_97155` |
+| `services_reauth` | `hours_97156_used` | `hours_consumed_97156` |
+| `assessment` | *(missing)* | `observation_date`, `additional_assessments_detail` |
+
+### Track 6: Staffing checklist — removed "First session completed"
+- Removed `first_session_completed` checkbox and its `mkChecklist()` default from the Staffing stage
+- Rationale: first session completion is captured via the service session log in In Services, not as a manual checkbox in Staffing
+
+---
+
+**feat/caregiver-training-update-STO-LTO-part-2** — Previous branch (merged)
+
+### Multi-step STO milestones for skill acquisition goals
 - Added `stoSteps[]` to `SKILL_GOAL_DEFAULTS` in `assessmentStore.js`
 - Three new store functions: `addSkillStoStep`, `updateSkillStoStep`, `removeSkillStoStep`
 - `SkillGoalCard.jsx` — replaced single STO fields with multi-step row UI (matches BehaviorTargetCard pattern); steps placed between Baseline and Mastery Criteria
@@ -328,11 +402,11 @@ Key payers in scope: BCBS (via Lucet/WebPass), Cigna/Evernorth, Sunshine Health 
 - New `renderSkillSTOChart` in `chartRenderer.js` and per-skill trajectory charts in `graphBuilder.js`
 - Seed data: stoSteps added to Emma Thompson, Marcus Rivera, Oliver Patel, Charlotte Davis skill goals
 
-### Track 2: Multi-step STO milestones for maladaptive behavior targets (existing pattern, new seed data)
+### Multi-step STO milestones for maladaptive behavior targets (existing pattern, new seed data)
 - stoSteps were already wired in the behavior target pipeline; audit confirmed all 7 consumers correct
 - Seed data added to all remaining behavior targets: Emma (Head Banging, Tantrum), Marcus (Physical Aggression, Bathing Refusal), Oliver (Physical Aggression, Elopement), Charlotte Davis (Task Refusal, Aggression)
 
-### Track 3: STO Milestone Rail in Plan Draft pipeline panel
+### STO Milestone Rail in Plan Draft pipeline panel
 - `PlanDraftInlinePanel.jsx` — added `StoMilestoneRail` component + expand-per-card UX for both `SkillTargetsPanel` and `BehaviorGoalsPanel`
 
 ### Caregiver Training (previous work, completed)
